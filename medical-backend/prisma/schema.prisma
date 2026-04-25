@@ -1,0 +1,83 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String     @id @default(auto()) @map("_id") @db.ObjectId
+  email            String     @unique
+  name             String?
+  role             String?    
+  password         String
+  refreshToken     String?
+  resetToken       String?    @unique
+  resetTokenExpiry DateTime?
+  chats            Chat[]
+  chatSessions     ChatSession[]
+  docs             Document[]
+  
+  // Relation to persist Subject Locking state
+  conversationState ConversationState?
+
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+}
+
+model ChatSession {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  sessionId String   @unique
+  title     String
+  userId    String   @db.ObjectId
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Chat {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  role      String   // 'user' or 'assistant'
+  content   String   
+  userId    String   @db.ObjectId
+  sessionId String   @default("legacy-session")
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  sources   Json?    // Added to persist citation links
+}
+
+model Document {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  url       String   
+  userId    String   @db.ObjectId
+  user      User?    @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  description String?
+}
+
+// ✅ FULLY UPDATED MODEL: Matches all fields used in chat.ts logic
+model ConversationState {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId            String   @unique @db.ObjectId
+  user              User     @relation(fields: [userId], references: [id])
+  
+  // Core Anchor Data
+  anchorSubject     String?  
+  anchorConfidence  Float    @default(0.0)
+  lastSubject       String?  
+  
+  // Logic Tracking
+  isPivot           Boolean  @default(false)
+  pivotReason       String?
+  conversationTurn  Int      @default(0)
+  
+  // Timestamps
+  analysisTimestamp DateTime @default(now())
+  lastUpdated       DateTime @updatedAt
+}

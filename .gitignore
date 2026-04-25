@@ -1,0 +1,159 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# ============================================
+# FRONTEND (Next.js) - medical-assistant
+# ============================================
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+.env.local
+.env.*.local
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# ============================================
+# BACKEND (Node.js + Prisma) - medical-backend
+# ============================================
+
+medical-backend/node_modules/
+medical-backend/dist/
+medical-backend/build/
+medical-backend/.env
+medical-backend/.env.local
+medical-backend/.env.*.local
+medical-backend/npm-debug.log*
+medical-backend/yarn-debug.log*
+medical-backend/yarn-error.log*
+medical-backend/.pnpm-debug.log*
+
+# Prisma
+medical-backend/prisma/dev.db
+medical-backend/prisma/dev.db-journal
+medical-backend/prisma/*.db
+medical-backend/prisma/*.db-journal
+
+# Generated Prisma Client
+medical-backend/src/generated/
+
+# ============================================
+# PYTHON BACKEND - medical-brain
+# ============================================
+
+# Python
+medical-brain/__pycache__/
+medical-brain/*.py[cod]
+medical-brain/*$py.class
+medical-brain/*.so
+medical-brain/.Python
+medical-brain/build/
+medical-brain/develop-eggs/
+medical-brain/dist/
+medical-brain/downloads/
+medical-brain/eggs/
+medical-brain/.eggs/
+medical-brain/lib/
+medical-brain/lib64/
+medical-brain/parts/
+medical-brain/sdist/
+medical-brain/var/
+medical-brain/wheels/
+medical-brain/pip-wheel-metadata/
+medical-brain/share/python-wheels/
+medical-brain/*.egg-info/
+medical-brain/.installed.cfg
+medical-brain/*.egg
+medical-brain/MANIFEST
+
+# Virtual Environments
+medical-brain/venv/
+medical-brain/env/
+medical-brain/ENV/
+medical-brain/env.bak/
+medical-brain/venv.bak/
+
+# Python IDE
+medical-brain/.venv/
+medical-brain/.env
+
+# Jupyter Notebook
+medical-brain/.ipynb_checkpoints
+
+# ChromaDB (Optional - uncomment if you want to ignore ChromaDB)
+# medical-brain/chroma_db/
+
+# ============================================
+# IDE & EDITOR
+# ============================================
+
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.env.local
+.env.*.local
+
+# ============================================
+# OS & SYSTEM FILES
+# ============================================
+
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ============================================
+# LOGS
+# ============================================
+
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# ============================================
+# MISC
+# ============================================
+
+.cache/
+.turbo/
+dist/
+build/
