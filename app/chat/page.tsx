@@ -155,12 +155,22 @@ export default function ResearchConversation() {
         };
 
         setConversations((prev) =>
-            prev.map((conv) =>
-                conv.id === currentConversationId
-                    ? { ...conv, messages: [...conv.messages, userMessage] }
-                    : conv
-            )
-        );
+    prev.map((conv) => {
+        if (conv.id !== currentConversationId) return conv;
+
+        // ✅ Auto-title on first message in real time
+        const isFirstMessage = conv.messages.length === 0;
+        const autoTitle = isFirstMessage && userPrompt
+            ? userPrompt.substring(0, 30) + (userPrompt.length > 30 ? '...' : '')
+            : conv.title;
+
+        return {
+            ...conv,
+            title: autoTitle,
+            messages: [...conv.messages, userMessage]
+        };
+    })
+);
 
         setInputValue('');
         setUploadedFiles([]);

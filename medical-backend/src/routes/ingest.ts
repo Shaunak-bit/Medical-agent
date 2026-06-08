@@ -331,7 +331,7 @@ router.get('/health/check', async (req: Request, res: Response) => {
 
         // Check Python Brain connection
         const brainCheck = await axios.get(`${PYTHON_BRAIN_URL}/health`, {
-            timeout: 5000
+            timeout: 120000    // ✅ increase to 2 minutes
         }).catch(() => ({ status: 503 }));
 
         return res.status(200).json({

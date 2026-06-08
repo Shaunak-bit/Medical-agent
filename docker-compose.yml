@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  # Frontend - Next.js
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: medical-assistant-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:3001
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - medical-network
+
+  # Backend - Node.js + Prisma
+  backend:
+    build:
+      context: ./medical-backend
+      dockerfile: Dockerfile
+    container_name: medical-assistant-backend
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DATABASE_URL=file:./dev.db
+      - JWT_SECRET=your-secret-key-here
+      - JWT_EXPIRY=24h
+      - CORS_ORIGIN=http://localhost:3000
+    volumes:
+      - ./medical-backend/prisma:/app/prisma
+    depends_on:
+      - ai-brain
+    restart: unless-stopped
+    networks:
+      - medical-network
+
+  # AI Brain - Python
+  ai-brain:
+    build:
+      context: ./medical-brain
+      dockerfile: Dockerfile
+    container_name: medical-assistant-ai
+    ports:
+      - "5000:5000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - API_PORT=5000
+      - API_HOST=0.0.0.0
+      - CHROMA_DB_PATH=./chroma_db
+      - BACKEND_URL=http://backend:3001
+    volumes:
+      - ./medical-brain/chroma_db:/app/chroma_db
+    restart: unless-stopped
+    networks:
+      - medical-network
+
+networks:
+  medical-network:
+    driver: bridge
+
+volumes:
+  chroma-db:
+    driver: local
+  prisma-db:
+    driver: local

@@ -1018,7 +1018,7 @@ router.post('/', middleware, async (req: AuthRequest, res: Response) => {
         // STEP 6: Call Python Brain
         // ========================================
         const response = await axios.post(`${PYTHON_BRAIN_URL}/query`, brainPayload, {
-            timeout: 45000
+            timeout: 120000 
         });
 
         const aiAnswer = response.data.answer || "No response received.";

@@ -31,17 +31,15 @@ collection = chroma_client.get_or_create_collection(name="medical_research")
 rerank_model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
 
 # ============================================================================
-# FIX #1: UPDATE PYDANTIC MODEL - Add context_awareness field
+# PYDANTIC MODELS
 # ============================================================================
 
 class BridgedQuery(BaseModel):
-    """Bridged query with weight information from Express backend"""
     query: str
     bridge_type: str
     weight: str  # "high", "medium", "low"
 
 class ContextAwareness(BaseModel):
-    """Context awareness payload from Subject Locking (Express)"""
     anchor_subject: Optional[str] = None
     anchor_confidence: float = 0.0
     is_locked: bool = False
@@ -51,36 +49,36 @@ class ContextAwareness(BaseModel):
     bridged_queries_with_weights: Optional[List[BridgedQuery]] = None
 
 class QueryRequest(BaseModel):
-    """FIX #1: Updated to accept context_awareness field"""
     prompt: str
     expanded_queries: List[str]
     system_prompt: str
     user_role: str
     conversation_context: Optional[dict] = None
-    # ✅ NEW FIELD: This "opens the slot" for the Express data
     context_awareness: Optional[ContextAwareness] = None
 
 # ============================================================================
-# LOGIC 1: Data Type Labeling System
+# DATA TYPE LABELING SYSTEM
 # ============================================================================
+
 class DataTypeLabel:
-    """
-    Defines source hierarchy and context types.
-    This tells the LLM how to prioritize and interpret different sources.
-    """
     THEORETICAL_METHODOLOGY = "Theoretical Methodology"
     LIVE_RESEARCH = "Live Research (PubMed)"
     ACTIVE_RECRUITING_STUDY = "Active Recruiting Study (ClinicalTrials.gov)"
-    
+    SEMANTIC_SCHOLAR = "Semantic Scholar Research"
+    CROSSREF_JOURNAL = "CrossRef Journal Article"
+    OPENALEX_RESEARCH = "OpenAlex Research"
+
     HIERARCHY = {
-        ACTIVE_RECRUITING_STUDY: 1,      # Highest priority - current, real trials
-        LIVE_RESEARCH: 2,                # Medium priority - recent publications
-        THEORETICAL_METHODOLOGY: 3       # Lower priority - general knowledge
+        ACTIVE_RECRUITING_STUDY: 1,
+        LIVE_RESEARCH: 2,
+        SEMANTIC_SCHOLAR: 3,
+        CROSSREF_JOURNAL: 4,
+        OPENALEX_RESEARCH: 5,
+        THEORETICAL_METHODOLOGY: 6
     }
 
     @staticmethod
     def get_label_instruction(label: str) -> str:
-        """Return contextual instruction for each label type."""
         instructions = {
             DataTypeLabel.ACTIVE_RECRUITING_STUDY: (
                 "[ACTIVE TRIAL] This is a currently recruiting clinical trial. "
@@ -93,12 +91,27 @@ class DataTypeLabel:
             DataTypeLabel.THEORETICAL_METHODOLOGY: (
                 "[METHODOLOGY] This is theoretical knowledge from PDFs. "
                 "Use for context and background, but prioritize live data if available."
-            )
+            ),
+            DataTypeLabel.SEMANTIC_SCHOLAR: (
+                "[SEMANTIC SCHOLAR] This is from Semantic Scholar's academic database. "
+                "Highly cited peer-reviewed research. Use for evidence-based answers."
+            ),
+            DataTypeLabel.CROSSREF_JOURNAL: (
+                "[CROSSREF] This is a peer-reviewed journal article indexed by CrossRef. "
+                "Use for verified academic citations and DOI-backed findings."
+            ),
+            DataTypeLabel.OPENALEX_RESEARCH: (
+                "[OPENALEX] This is from OpenAlex, the largest open academic database. "
+                "Use for broad academic coverage and citation counts."
+            ),
         }
         return instructions.get(label, "")
 
+# ============================================================================
+# PUBMED FETCHER
+# ============================================================================
+
 class PubMedFetcher:
-    """Handles deep retrieval from NCBI PubMed API"""
     BASE_SEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
     BASE_FETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 
@@ -136,7 +149,7 @@ class PubMedFetcher:
                 pmid = article.find(".//PMID").text
                 year_tag = article.find(".//PubDate/Year")
                 year = year_tag.text if year_tag is not None else "N/A"
-                
+
                 articles.append({
                     "content": f"Title: {title}\nAbstract: {abstract}",
                     "metadata": {
@@ -153,36 +166,32 @@ class PubMedFetcher:
                 continue
         return articles
 
+# ============================================================================
+# CLINICAL TRIALS FETCHER
+# ============================================================================
+
 class ClinicalTrialsFetcher:
-    """
-    Handles retrieval from ClinicalTrials.gov API v2 with term-based searching.
-    """
     BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
 
     async def fetch_trials(self, expanded_queries: List[str], limit: int = 15):
-        """
-        Use expanded_queries for term-based search.
-        """
         async with httpx.AsyncClient() as client:
             trials = []
-            
             primary_query = expanded_queries[0] if expanded_queries else "clinical trial"
-            
+
             params = {
                 "query.term": primary_query,
                 "pageSize": limit,
                 "format": "json",
                 "filter.overallStatus": "RECRUITING"
             }
-            
+
             try:
                 response = await client.get(self.BASE_URL, params=params, timeout=10.0)
                 data = response.json()
-                
+
                 for study in data.get("studies", []):
                     protocol = study.get("protocolSection", {})
                     id_info = protocol.get("identificationModule", {})
-                    status_info = protocol.get("statusModule", {})
                     desc_info = protocol.get("descriptionModule", {})
                     eligibility = protocol.get("eligibilityModule", {})
                     locations_info = protocol.get("contactsLocationsModule", {})
@@ -191,8 +200,7 @@ class ClinicalTrialsFetcher:
                     nct_id = id_info.get("nctId", "N/A")
                     summary = desc_info.get("briefSummary", "No summary available.")
                     criteria = eligibility.get("eligibilityCriteria", "No criteria listed.")
-                    
-                    # Extract locations if available
+
                     locations = []
                     if locations_info:
                         for loc in locations_info.get("locations", []):
@@ -200,9 +208,9 @@ class ClinicalTrialsFetcher:
                             country = loc.get("country", "")
                             if city or country:
                                 locations.append(f"{city}, {country}".strip(", "))
-                    
+
                     location_str = f"Locations: {', '.join(locations)}" if locations else "Location: Not specified"
-                    
+
                     trials.append({
                         "content": f"Clinical Trial: {title}\nNCT ID: {nct_id}\n{location_str}\nCriteria: {criteria}\nSummary: {summary}",
                         "metadata": {
@@ -216,11 +224,184 @@ class ClinicalTrialsFetcher:
                     })
             except Exception as e:
                 print(f"Error fetching clinical trials: {str(e)}")
-                
+
             return trials
+
+# ============================================================================
+# SEMANTIC SCHOLAR FETCHER (closest to Google Scholar)
+# ============================================================================
+
+class SemanticScholarFetcher:
+    BASE_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+
+    async def fetch_papers(self, query: str, limit: int = 10):
+        async with httpx.AsyncClient() as client:
+            try:
+                params = {
+                    "query": query,
+                    "limit": limit,
+                    "fields": "title,abstract,year,authors,url,citationCount,externalIds"
+                }
+                response = await client.get(self.BASE_URL, params=params, timeout=10.0)
+                data = response.json()
+
+                papers = []
+                for paper in data.get("data", []):
+                    title = paper.get("title", "Untitled")
+                    abstract = paper.get("abstract") or "No abstract available."
+                    year = paper.get("year", "N/A")
+                    url = paper.get("url", "")
+                    citations = paper.get("citationCount", 0)
+                    authors = paper.get("authors", [])
+                    author_str = ", ".join([a.get("name", "") for a in authors[:3]])
+                    if len(authors) > 3:
+                        author_str += " et al."
+
+                    papers.append({
+                        "content": f"Title: {title}\nAuthors: {author_str}\nYear: {year}\nCitations: {citations}\nAbstract: {abstract}",
+                        "metadata": {
+                            "source": "Semantic Scholar",
+                            "page": f"Year:{year} | Citations:{citations}",
+                            "link": url,
+                            "data_type": DataTypeLabel.SEMANTIC_SCHOLAR,
+                            "type_instruction": DataTypeLabel.get_label_instruction(DataTypeLabel.SEMANTIC_SCHOLAR)
+                        }
+                    })
+                print(f"   ✓ Semantic Scholar: {len(papers)} papers retrieved")
+                return papers
+            except Exception as e:
+                print(f"   ❌ Semantic Scholar error: {str(e)}")
+                return []
+
+# ============================================================================
+# CROSSREF FETCHER (peer-reviewed journals with DOIs)
+# ============================================================================
+
+class CrossRefFetcher:
+    BASE_URL = "https://api.crossref.org/works"
+
+    async def fetch_papers(self, query: str, limit: int = 10):
+        async with httpx.AsyncClient() as client:
+            try:
+                params = {
+                    "query": query,
+                    "rows": limit,
+                    "select": "title,abstract,URL,published,author,is-referenced-by-count,container-title"
+                }
+                response = await client.get(self.BASE_URL, params=params, timeout=10.0)
+                data = response.json()
+
+                papers = []
+                for item in data.get("message", {}).get("items", []):
+                    title_list = item.get("title", ["Untitled"])
+                    title = title_list[0] if title_list else "Untitled"
+                    abstract = item.get("abstract", "No abstract available.")
+                    # Strip HTML tags from abstract if present
+                    abstract = re.sub(r'<[^>]+>', '', abstract)
+                    url = item.get("URL", "")
+                    year = item.get("published", {}).get("date-parts", [["N/A"]])[0][0]
+                    citations = item.get("is-referenced-by-count", 0)
+                    journal = item.get("container-title", [""])[0] if item.get("container-title") else ""
+                    authors = item.get("author", [])
+                    author_str = ", ".join([f"{a.get('given', '')} {a.get('family', '')}".strip() for a in authors[:3]])
+                    if len(authors) > 3:
+                        author_str += " et al."
+
+                    papers.append({
+                        "content": f"Title: {title}\nJournal: {journal}\nAuthors: {author_str}\nYear: {year}\nCitations: {citations}\nAbstract: {abstract}",
+                        "metadata": {
+                            "source": "CrossRef",
+                            "page": f"Year:{year} | Journal:{journal}",
+                            "link": url,
+                            "data_type": DataTypeLabel.CROSSREF_JOURNAL,
+                            "type_instruction": DataTypeLabel.get_label_instruction(DataTypeLabel.CROSSREF_JOURNAL)
+                        }
+                    })
+                print(f"   ✓ CrossRef: {len(papers)} papers retrieved")
+                return papers
+            except Exception as e:
+                print(f"   ❌ CrossRef error: {str(e)}")
+                return []
+
+# ============================================================================
+# OPENALEX FETCHER (largest open academic database)
+# ============================================================================
+
+class OpenAlexFetcher:
+    BASE_URL = "https://api.openalex.org/works"
+
+    async def fetch_papers(self, query: str, limit: int = 10):
+        async with httpx.AsyncClient() as client:
+            try:
+                params = {
+                    "search": query,
+                    "per-page": limit,
+                    "select": "title,abstract_inverted_index,doi,publication_year,cited_by_count,authorships,primary_location"
+                }
+                # Add email for polite pool (faster responses)
+                headers = {"User-Agent": "MedicalAssistant/1.0 (mailto:research@medicalapp.com)"}
+                response = await client.get(self.BASE_URL, params=params, headers=headers, timeout=10.0)
+                data = response.json()
+
+                papers = []
+                for work in data.get("results", []):
+                    title = work.get("title", "Untitled")
+                    doi = work.get("doi", "")
+                    year = work.get("publication_year", "N/A")
+                    citations = work.get("cited_by_count", 0)
+
+                    # Reconstruct abstract from inverted index
+                    abstract = "No abstract available."
+                    inverted = work.get("abstract_inverted_index")
+                    if inverted:
+                        try:
+                            word_positions = []
+                            for word, positions in inverted.items():
+                                for pos in positions:
+                                    word_positions.append((pos, word))
+                            word_positions.sort(key=lambda x: x[0])
+                            abstract = " ".join([w for _, w in word_positions])
+                        except Exception:
+                            abstract = "Abstract reconstruction failed."
+
+                    # Get journal name
+                    journal = ""
+                    primary_loc = work.get("primary_location", {})
+                    if primary_loc and primary_loc.get("source"):
+                        journal = primary_loc["source"].get("display_name", "")
+
+                    # Get authors
+                    authorships = work.get("authorships", [])
+                    authors = [a.get("author", {}).get("display_name", "") for a in authorships[:3]]
+                    author_str = ", ".join(filter(None, authors))
+                    if len(authorships) > 3:
+                        author_str += " et al."
+
+                    papers.append({
+                        "content": f"Title: {title}\nJournal: {journal}\nAuthors: {author_str}\nYear: {year}\nCitations: {citations}\nAbstract: {abstract}",
+                        "metadata": {
+                            "source": "OpenAlex",
+                            "page": f"Year:{year} | Citations:{citations}",
+                            "link": doi or f"https://openalex.org/works?search={title}",
+                            "data_type": DataTypeLabel.OPENALEX_RESEARCH,
+                            "type_instruction": DataTypeLabel.get_label_instruction(DataTypeLabel.OPENALEX_RESEARCH)
+                        }
+                    })
+                print(f"   ✓ OpenAlex: {len(papers)} papers retrieved")
+                return papers
+            except Exception as e:
+                print(f"   ❌ OpenAlex error: {str(e)}")
+                return []
+
+# ============================================================================
+# Initialize all fetchers
+# ============================================================================
 
 pubmed_fetcher = PubMedFetcher()
 trials_fetcher = ClinicalTrialsFetcher()
+semantic_scholar_fetcher = SemanticScholarFetcher()
+crossref_fetcher = CrossRefFetcher()
+openalex_fetcher = OpenAlexFetcher()
 
 # ============================================================================
 # FIX #2: INJECT ANCHOR INTO SYSTEM PROMPT
@@ -230,21 +411,14 @@ def inject_anchor_instruction(
     system_prompt: str,
     context_awareness: Optional[ContextAwareness]
 ) -> str:
-    """
-    Inject anchor subject into system prompt as master rule.
-
-    On PIVOT: hard-forbids the old subject and forces focus on the new one.
-    On CONTINUATION: reminds the LLM to stay anchored to the current subject.
-    """
-
     if not context_awareness or not context_awareness.anchor_subject:
         return system_prompt
 
-    anchor    = context_awareness.anchor_subject
+    anchor = context_awareness.anchor_subject
     confidence = context_awareness.anchor_confidence
-    is_locked  = context_awareness.is_locked
-    is_pivot   = context_awareness.is_pivot
-    last_subj  = context_awareness.last_subject  # e.g. "Multiple Sclerosis"
+    is_locked = context_awareness.is_locked
+    is_pivot = context_awareness.is_pivot
+    last_subj = context_awareness.last_subject
 
     anchor_instruction = (
         f"\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -296,100 +470,65 @@ def inject_anchor_instruction(
 # ============================================================================
 
 def should_prioritize_live_data(context_awareness: Optional[ContextAwareness]) -> bool:
-    """
-    FIX #3: Determine if we should prioritize live data over local PDFs.
-    
-    Logic:
-    - If pivot detected: YES (new subject, need fresh data)
-    - If anchor subject is medical condition: YES (prioritize current trials)
-    - Otherwise: Balance both sources
-    """
-    
     if not context_awareness:
         return False
-    
-    # If pivot detected, definitely prioritize live data
     if context_awareness.is_pivot:
         print(f"🔄 PIVOT DETECTED: Prioritizing live data for new subject")
         return True
-    
-    # If locked to a subject, prioritize active trials and recent research
     if context_awareness.is_locked and context_awareness.anchor_subject:
         print(f"🔒 LOCKED TO: {context_awareness.anchor_subject} - Prioritizing live trials and research")
         return True
-    
     return False
 
 def filter_candidates_by_pivot(
     all_candidates: List[dict],
     context_awareness: Optional[ContextAwareness]
 ) -> List[dict]:
-    """
-    FIX #3: Filter out candidates from previous subject if pivot detected.
-    
-    This prevents "context bleed" where results from the old topic
-    contaminate results for the new topic.
-    """
-    
     if not context_awareness or not context_awareness.is_pivot:
-        # No pivot - keep all candidates
         return all_candidates
-    
+
     print("   🧹 PIVOT DETECTED: Clearing internal short-term memory and focusing solely on new subject.")
-    
+
     last_subject = context_awareness.last_subject
     new_subject = context_awareness.anchor_subject
-    
+
     if not last_subject:
-        # No previous subject to filter
         return all_candidates
-    
-    # Filter: Keep only candidates that DON'T mention the old subject,
-    # OR that explicitly mention the new subject, effectively focusing only on the new searches.
+
     filtered = []
     for cand in all_candidates:
         content = cand.get("content", "").lower()
         meta = cand.get("metadata", {})
-        
-        # If it explicitly mentions the new subject, definitely keep it
+
         if new_subject and new_subject.lower() in content:
             filtered.append(cand)
             continue
-            
-        # If content mentions old subject and not the new one, skip it
+
         if last_subject.lower() in content:
             print(f"   ❌ Filtering out (old subject '{last_subject}' mentioned without target '{new_subject}'): {meta.get('source')} {meta.get('page')}")
             continue
-        
+
         filtered.append(cand)
-    
+
     print(f"   Pivot filtering: {len(all_candidates)} candidates → {len(filtered)} candidates")
     return filtered
 
 # ============================================================================
-# FALLBACK: Retrieve All Documents from ChromaDB (For General Queries)
+# FALLBACK: Retrieve All Documents from ChromaDB
 # ============================================================================
 
 def get_all_chroma_documents() -> List[dict]:
-    """
-    Retrieve all documents from ChromaDB without semantic filtering.
-    Useful when user asks generic questions like "what is in the pdf".
-    """
     try:
         print(f"   📂 Fallback: Retrieving all documents from ChromaDB...")
-        
-        # Get collection size (count)
         count = collection.count()
         print(f"   📊 Collection has {count} documents total")
-        
+
         if count == 0:
             print(f"   ⚠️  ChromaDB collection is empty - no PDFs have been ingested")
             return []
-        
-        # Get all documents (no filtering)
-        # ChromaDB doesn't have a "get all" in newer versions, so we use query with a generic string
+
         all_docs = collection.get()
-        
+
         candidates = []
         if all_docs and all_docs.get('documents'):
             for doc, meta in zip(all_docs['documents'], all_docs['metadatas']):
@@ -399,43 +538,34 @@ def get_all_chroma_documents() -> List[dict]:
                         DataTypeLabel.THEORETICAL_METHODOLOGY
                     )
                 candidates.append({"content": doc, "metadata": meta})
-            
+
             print(f"   ✅ Retrieved {len(candidates)} documents from ChromaDB")
-            # Group by source for logging
             sources_found = {}
             for cand in candidates:
                 source = cand['metadata'].get('source', 'Unknown')
                 sources_found[source] = sources_found.get(source, 0) + 1
-            
+
             for source, count in sources_found.items():
                 print(f"      • {source}: {count} chunks")
-        
+
         return candidates
     except Exception as e:
         print(f"   ❌ Error retrieving all documents: {str(e)}")
         return []
 
 # ============================================================================
-# FIX #4: USE BRIDGED QUERIES FOR ALL API CALLS
+# GATHER CANDIDATES WITH ALL SOURCES
 # ============================================================================
 
 async def gather_candidates_with_bridge_priority(
     request: QueryRequest,
     context_awareness: Optional[ContextAwareness]
 ) -> List[dict]:
-    """
-    Gather candidates using bridged queries with pivot-awareness.
-
-    PIVOT CASE  : Ignore ALL old bridged queries (which are tainted by the old
-                  subject). Build fresh search terms directly from the new anchor.
-    NORMAL CASE : Use high-weight bridged queries from Express (anchor + intent).
-    """
-
     all_candidates = []
-    is_pivot   = context_awareness.is_pivot   if context_awareness else False
+    is_pivot = context_awareness.is_pivot if context_awareness else False
     new_anchor = context_awareness.anchor_subject if context_awareness else None
 
-    # ── PIVOT: restart with clean, anchor-focused queries ──────────────────────
+    # Build queries
     if is_pivot and new_anchor:
         print(f"\n🔄 PIVOT MODE: Ignoring old bridged queries. Building fresh queries for '{new_anchor}'.")
         queries_to_use = [
@@ -443,35 +573,33 @@ async def gather_candidates_with_bridge_priority(
             f"{new_anchor} treatment",
             f"{new_anchor} management",
             f"{new_anchor} clinical trials",
-            request.prompt,            # include the user's exact words too
+            request.prompt,
         ]
         print(f"   Fresh pivot queries: {queries_to_use}")
-
-    # ── NORMAL: use high-weight bridged queries supplied by Express ─────────────
     else:
         queries_to_use = request.expanded_queries
         if context_awareness and context_awareness.bridged_queries_with_weights:
-            high_weight   = [bq.query for bq in context_awareness.bridged_queries_with_weights if bq.weight == "high"]
+            high_weight = [bq.query for bq in context_awareness.bridged_queries_with_weights if bq.weight == "high"]
             medium_weight = [bq.query for bq in context_awareness.bridged_queries_with_weights if bq.weight == "medium"]
             if high_weight:
                 queries_to_use = high_weight + medium_weight + request.expanded_queries
                 print(f"🌉 Using bridged queries (high-weight priority)")
 
+    primary_query = queries_to_use[0] if queries_to_use else request.prompt
+
     # A. Local PDF Context
     print(f"\n📚 LOCAL PDF RETRIEVAL")
-    
-    # Check if the user is specifically asking about a local document
     intent = context_awareness.detected_intent if context_awareness else None
-    is_local_document = (intent == "local_document") or any(word in request.prompt.lower() for word in ["pdf", "document", "file", "uploaded", "this paper"])
-    
+    is_local_document = (intent == "local_document") or any(
+        word in request.prompt.lower() for word in ["pdf", "document", "file", "uploaded", "this paper"]
+    )
+
     target_source = None
     if is_local_document:
         try:
             meta_res = collection.get(include=["metadatas"])
             if meta_res and meta_res.get('metadatas') and len(meta_res['metadatas']) > 0:
                 target_source = meta_res['metadatas'][-1].get('source')
-                
-                # If they explicitly mention a known source in the prompt, use that instead
                 sources = set(m.get('source') for m in meta_res['metadatas'] if m.get('source'))
                 for src in sources:
                     if src.lower().replace(".pdf", "") in request.prompt.lower() or src.lower() in request.prompt.lower():
@@ -482,7 +610,7 @@ async def gather_candidates_with_bridge_priority(
             print(f"   ❌ Error identifying target document: {str(e)}")
 
     print(f"   Queries to search: {queries_to_use[:2]}")
-    
+
     for q in queries_to_use[:2]:
         try:
             print(f"   🔍 Searching for: '{q}'")
@@ -490,19 +618,14 @@ async def gather_candidates_with_bridge_priority(
                 local_res = collection.query(query_texts=[q], n_results=15, where={"source": target_source})
             else:
                 local_res = collection.query(query_texts=[q], n_results=15)
-            
-            # Debug: Check what ChromaDB returned
-            if not local_res:
-                print(f"   ⚠️  ChromaDB returned None")
-                continue
-                
-            if not local_res.get('documents') or len(local_res['documents']) == 0:
+
+            if not local_res or not local_res.get('documents') or len(local_res['documents']) == 0:
                 print(f"   ⚠️  No documents found for query: '{q}'")
                 continue
-            
+
             docs_count = len(local_res['documents'][0]) if local_res['documents'][0] else 0
             print(f"   ✅ Found {docs_count} results for query: '{q}'")
-            
+
             for i, (doc, meta) in enumerate(zip(local_res['documents'][0], local_res['metadatas'][0])):
                 if "data_type" not in meta:
                     meta["data_type"] = DataTypeLabel.THEORETICAL_METHODOLOGY
@@ -516,31 +639,39 @@ async def gather_candidates_with_bridge_priority(
             import traceback
             traceback.print_exc()
 
-    # ⚠️ FALLBACK: If semantic search found nothing, get all documents from collection
     if len(all_candidates) == 0:
         print(f"\n⚠️  FALLBACK: Semantic search returned 0 results")
         fallback_docs = get_all_chroma_documents()
         all_candidates.extend(fallback_docs)
         print(f"   Added {len(fallback_docs)} documents via fallback retrieval")
 
-    # B. Live PubMed Data
-    print(f"\n🔬 PUBMED RETRIEVAL")
-    if is_local_document:
-        print("   Skipping PubMed retrieval (intent is local_document)")
-    else:
-        primary_query = queries_to_use[0] if queries_to_use else request.prompt
-        live_research = await pubmed_fetcher.fetch_research(primary_query, limit=25)
+    if not is_local_document:
+        # B. PubMed
+        print(f"\n🔬 PUBMED RETRIEVAL")
+        live_research = await pubmed_fetcher.fetch_research(primary_query, limit=20)
         all_candidates.extend(live_research)
         print(f"   ✓ Retrieved {len(live_research)} PubMed articles")
 
-    # C. Live Clinical Trials
-    print(f"\n🏥 CLINICAL TRIALS RETRIEVAL")
-    if is_local_document:
-        print("   Skipping Clinical Trials retrieval (intent is local_document)")
-    else:
+        # C. Clinical Trials
+        print(f"\n🏥 CLINICAL TRIALS RETRIEVAL")
         live_trials = await trials_fetcher.fetch_trials(queries_to_use, limit=15)
         all_candidates.extend(live_trials)
         print(f"   ✓ Retrieved {len(live_trials)} active clinical trials")
+
+        # D. Semantic Scholar
+        print(f"\n📖 SEMANTIC SCHOLAR RETRIEVAL")
+        semantic_papers = await semantic_scholar_fetcher.fetch_papers(primary_query, limit=10)
+        all_candidates.extend(semantic_papers)
+
+        # E. CrossRef
+        print(f"\n📰 CROSSREF RETRIEVAL")
+        crossref_papers = await crossref_fetcher.fetch_papers(primary_query, limit=10)
+        all_candidates.extend(crossref_papers)
+
+        # F. OpenAlex
+        print(f"\n🌐 OPENALEX RETRIEVAL")
+        openalex_papers = await openalex_fetcher.fetch_papers(primary_query, limit=10)
+        all_candidates.extend(openalex_papers)
 
     return all_candidates
 
@@ -554,10 +685,9 @@ async def query_assistant(request: QueryRequest):
         print(f"\n{'='*80}")
         print(f"📝 QUERY PROCESSING WITH SUBJECT LOCKING")
         print(f"{'='*80}")
-        
-        # Extract context awareness
+
         context_awareness = request.context_awareness
-        
+
         if context_awareness:
             print(f"\n🎯 CONTEXT AWARENESS DETECTED:")
             print(f"   Anchor Subject: {context_awareness.anchor_subject}")
@@ -569,16 +699,12 @@ async def query_assistant(request: QueryRequest):
                 print("   🧹 PIVOT FLUSH: Clearing internal short-term conversation context to focus on new subject.")
                 request.conversation_context = None
 
-        # ========================================================================
-        # Stage 1: Gather Candidates with Bridge Priority (FIX #4)
-        # ========================================================================
-        print(f"\n📊 STAGE 1: CANDIDATE GATHERING (with Bridge Priority)")
+        # Stage 1: Gather Candidates
+        print(f"\n📊 STAGE 1: CANDIDATE GATHERING")
         all_candidates = await gather_candidates_with_bridge_priority(request, context_awareness)
 
-        # ========================================================================
-        # Stage 2: Pivot-Aware Filtering (FIX #3)
-        # ========================================================================
-        print(f"\n🔄 STAGE 2: PIVOT-AWARE FILTERING (FIX #3)")
+        # Stage 2: Pivot-Aware Filtering
+        print(f"\n🔄 STAGE 2: PIVOT-AWARE FILTERING")
         all_candidates = filter_candidates_by_pivot(all_candidates, context_awareness)
 
         if not all_candidates:
@@ -587,35 +713,31 @@ async def query_assistant(request: QueryRequest):
                 "sources": []
             }
 
-        # ========================================================================
-        # Stage 3: Intelligent Re-Ranking
-        # ========================================================================
+        # Stage 3: Re-Ranking
         print(f"\n⚡ STAGE 3: INTELLIGENT RE-RANKING")
         pairs = [[request.prompt, cand["content"]] for cand in all_candidates]
         scores = rerank_model.predict(pairs)
-        
+
         for i, cand in enumerate(all_candidates):
             cand["score"] = float(scores[i])
 
         ranked_candidates = sorted(all_candidates, key=lambda x: x["score"], reverse=True)[:8]
         print(f"   ✓ Top 8 candidates selected from {len(all_candidates)} total")
 
-        # ========================================================================
-        # Stage 4: Format Context with Type Labels
-        # ========================================================================
+        # Stage 4: Format Context
         context_parts = []
         source_list = []
-        
+
         for cand in ranked_candidates:
             meta = cand["metadata"]
             data_type = meta.get("data_type", "Unknown")
             type_instruction = meta.get("type_instruction", "")
             citation = f"[Source: {meta.get('source')}, Ref: {meta.get('page')}]"
             type_label = f"[{data_type}]"
-            
+
             context_entry = f"{type_label} {type_instruction}\n{citation}\n{cand['content']}"
             context_parts.append(context_entry)
-            
+
             source_list.append({
                 "file": meta.get('source'),
                 "page": meta.get('page'),
@@ -623,13 +745,10 @@ async def query_assistant(request: QueryRequest):
                 "data_type": data_type
             })
 
-        # ========================================================================
-        # Stage 5: Inject Anchor into System Prompt (FIX #2)
-        # ========================================================================
-        print(f"\n🔧 STAGE 4: BUILDING ENHANCED SYSTEM PROMPT (FIX #2)")
+        # Stage 5: Build System Prompt
+        print(f"\n🔧 STAGE 4: BUILDING ENHANCED SYSTEM PROMPT")
         system_prompt_with_anchor = inject_anchor_instruction(request.system_prompt, context_awareness)
-        
-        # Build final prompt with context
+
         prompt_with_context = ""
         if request.conversation_context:
             ctx = request.conversation_context
@@ -637,29 +756,20 @@ async def query_assistant(request: QueryRequest):
             if ctx.get('primary_topic'):
                 prompt_with_context += f"Primary Topic: {ctx.get('primary_topic')}\n"
             prompt_with_context += f"Is Follow-up: {ctx.get('is_followup')}\n\n"
-            
+
         prompt_with_context += (
             f"Context (organized by data type):\n\n" +
             "\n\n".join(context_parts) +
             f"\n\nQuestion: {request.prompt}"
         )
 
-        # ========================================================================
-        # Stage 6: Call Groq with Enhanced System Prompt
-        # ========================================================================
+        # Stage 6: LLM Inference
         print(f"\n🤖 STAGE 5: LLM INFERENCE")
         completion = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {
-                    "role": "system",
-                    # Use the anchor-enhanced system prompt
-                    "content": system_prompt_with_anchor
-                },
-                {
-                    "role": "user",
-                    "content": prompt_with_context
-                }
+                {"role": "system", "content": system_prompt_with_anchor},
+                {"role": "user", "content": prompt_with_context}
             ],
             temperature=0.1,
             max_tokens=1500
@@ -690,34 +800,29 @@ async def query_assistant(request: QueryRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+# ============================================================================
+# INGEST ENDPOINT
+# ============================================================================
+
 @app.post("/ingest")
 async def ingest_pdf(file: UploadFile = File(...)):
-    """
-    Ingest PDF and add to vector database with Data Type Labeling
-    """
     try:
         print(f"[Python Brain] Starting PDF ingestion: {file.filename}")
         print(f"[Python Brain] File size: {file.size} bytes, Content type: {file.content_type}")
-        
-        # Validate file is actually a PDF
+
         if not file.filename or not file.filename.lower().endswith('.pdf'):
             raise HTTPException(status_code=400, detail="File must be a PDF")
-        
-        # Read the PDF file
+
         try:
             reader = PdfReader(file.file)
             print(f"[Python Brain] PDF loaded successfully with {len(reader.pages)} pages")
         except Exception as pdf_error:
             print(f"[Python Brain] Error reading PDF: {str(pdf_error)}")
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Failed to read PDF file: {str(pdf_error)}"
-            )
-        
-        # If PDF has no pages
+            raise HTTPException(status_code=400, detail=f"Failed to read PDF file: {str(pdf_error)}")
+
         if len(reader.pages) == 0:
             raise HTTPException(status_code=400, detail="PDF file has no pages")
-        
+
         splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=300)
         all_chunks = []
         all_metadatas = []
@@ -729,10 +834,10 @@ async def ingest_pdf(file: UploadFile = File(...)):
                 if not page_text or page_text.strip() == "":
                     print(f"[Python Brain] Warning: Page {page_num + 1} extracted no text")
                     continue
-                
+
                 extracted_pages += 1
                 page_chunks = splitter.split_text(page_text)
-                
+
                 for chunk in page_chunks:
                     all_chunks.append(chunk)
                     all_metadatas.append({
@@ -746,16 +851,14 @@ async def ingest_pdf(file: UploadFile = File(...)):
                     })
             except Exception as page_error:
                 print(f"[Python Brain] Error processing page {page_num + 1}: {str(page_error)}")
-                # Continue with next page instead of failing
                 continue
 
         if len(all_chunks) == 0:
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail="No extractable text found in PDF. The PDF may be scanned/image-based without OCR."
             )
 
-        # Add to ChromaDB
         try:
             collection.add(
                 documents=all_chunks,
@@ -765,11 +868,8 @@ async def ingest_pdf(file: UploadFile = File(...)):
             print(f"[Python Brain] Successfully added {len(all_chunks)} chunks to ChromaDB")
         except Exception as chroma_error:
             print(f"[Python Brain] ChromaDB storage error: {str(chroma_error)}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to store chunks in vector database: {str(chroma_error)}"
-            )
-        
+            raise HTTPException(status_code=500, detail=f"Failed to store chunks in vector database: {str(chroma_error)}")
+
         return {
             "message": f"Successfully indexed {file.filename}",
             "chunks_created": len(all_chunks),
@@ -783,18 +883,29 @@ async def ingest_pdf(file: UploadFile = File(...)):
         print(f"[Python Brain] Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
+# ============================================================================
+# HEALTH CHECK
+# ============================================================================
+
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
     return {
         "status": "healthy",
+        "sources": {
+            "pubmed": "✅ Active",
+            "clinical_trials": "✅ Active",
+            "semantic_scholar": "✅ Active",
+            "crossref": "✅ Active",
+            "openalex": "✅ Active",
+            "local_pdfs": "✅ Active"
+        },
         "features": {
             "fix_1_pydantic_context_awareness": "✅ QueryRequest accepts context_awareness",
             "fix_2_anchor_injection": "✅ Anchor subject injected into system prompt",
             "fix_3_pivot_aware_retrieval": "✅ Pivot detection filters old subject results",
             "fix_4_bridge_queries": "✅ Uses bridged queries for all API calls",
-            "data_type_labeling": "✅ Sources labeled by type (Active Trial/Live Research/Methodology)",
-            "multi_source_retrieval": "✅ PubMed + ClinicalTrials + Local PDFs",
+            "data_type_labeling": "✅ Sources labeled by type",
+            "multi_source_retrieval": "✅ PubMed + ClinicalTrials + Semantic Scholar + CrossRef + OpenAlex + Local PDFs",
             "cross_encoder_reranking": "✅ Semantic reranking with CrossEncoder"
         },
         "subject_locking_ready": True

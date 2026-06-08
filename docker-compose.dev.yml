@@ -1,0 +1,77 @@
+# Development Docker Compose Configuration
+# Run with: docker-compose -f docker-compose.dev.yml up
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: medical-assistant-frontend-dev
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:3001/api
+      - NODE_ENV=development
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    command: sh -c "npm install && npm run dev"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - medical-network
+
+  backend:
+    build:
+      context: ./medical-backend
+      dockerfile: Dockerfile
+      target: dev
+    container_name: medical-assistant-backend-dev
+    env_file:
+      - .env
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - DATABASE_URL=${DATABASE_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRY=24h
+      - CORS_ORIGIN=http://localhost:3000
+      - PYTHON_BRAIN_URL=http://ai-brain:8000    # ✅ fixed
+    volumes:
+      - ./medical-backend:/app
+      - /app/node_modules
+      - /app/src/generated
+    command: sh -c "npx prisma generate && npm run dev"
+    depends_on:
+      - ai-brain
+    restart: unless-stopped
+    networks:
+      - medical-network
+
+  ai-brain:
+    build:
+      context: ./medical-brain
+      dockerfile: Dockerfile
+    container_name: medical-assistant-ai-dev
+    ports:
+      - "8000:8000"                  # ✅ fixed from 5000:5000
+    environment:
+      - PYTHONUNBUFFERED=1
+      - API_PORT=8000                # ✅ fixed from 5000
+      - API_HOST=0.0.0.0
+      - CHROMA_DB_PATH=./chroma_db
+      - BACKEND_URL=http://backend:3001
+      - GROQ_API_KEY=${GROQ_API_KEY}
+    volumes:
+      - ./medical-brain:/app
+    restart: unless-stopped
+    networks:
+      - medical-network
+
+networks:
+  medical-network:
+    driver: bridge

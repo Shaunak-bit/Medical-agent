@@ -1,7 +1,8 @@
 export interface Source {
     file: string;
-    page: number;
+    page: string; 
     link: string;
+    data_type?: string; 
 }
 
 export interface Message {
