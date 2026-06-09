@@ -561,21 +561,16 @@ async def query_assistant(request: QueryRequest):
         if context_awareness and context_awareness.is_pivot:
             request.conversation_context = None
 
-        # Stage 1: Gather
         all_candidates = await gather_candidates_with_bridge_priority(request, context_awareness)
-
-        # Stage 2: Filter
         all_candidates = filter_candidates_by_pivot(all_candidates, context_awareness)
 
         if not all_candidates:
             return {"answer": "I couldn't find any relevant research or trials.", "sources": []}
 
-        # Stage 3: Simple selection (no reranking - saves memory on free tier) ✅
         print(f"\n⚡ STAGE 3: CANDIDATE SELECTION")
         ranked_candidates = all_candidates[:8]
         print(f"   ✓ Top 8 from {len(all_candidates)} total")
 
-        # Stage 4: Format Context
         context_parts = []
         source_list = []
 
@@ -593,8 +588,6 @@ async def query_assistant(request: QueryRequest):
                 "data_type": data_type
             })
 
-        # Stage 5: System Prompt
-        print(f"\n🔧 STAGE 4: BUILDING SYSTEM PROMPT")
         system_prompt_with_anchor = inject_anchor_instruction(request.system_prompt, context_awareness)
 
         prompt_with_context = ""
@@ -610,7 +603,6 @@ async def query_assistant(request: QueryRequest):
             f"\n\nQuestion: {request.prompt}"
         )
 
-        # Stage 6: LLM
         print(f"\n🤖 STAGE 5: LLM INFERENCE")
         completion = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -706,6 +698,20 @@ async def ingest_pdf(file: UploadFile = File(...)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+# ============================================================================
+# CLEAR DATABASE ENDPOINT ✅ NEW
+# ============================================================================
+
+@app.delete("/clear-db")
+async def clear_database():
+    try:
+        global collection
+        chroma_client.delete_collection("medical_research")
+        collection = chroma_client.get_or_create_collection(name="medical_research")
+        return {"message": "✅ ChromaDB cleared successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================================
 # HEALTH CHECK
