@@ -6,4 +6,3 @@ pypdf
 langchain-text-splitters
 python-dotenv
 python-multipart
-sentence-transformers
