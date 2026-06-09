@@ -1,7 +1,7 @@
 "use client";
 import React, { useRef, useEffect } from 'react';
 import { Message, Source } from '../types';
-import { FileText, ExternalLink, BookOpen } from 'lucide-react'; // Standard icons for research
+import { FileText, ExternalLink, BookOpen } from 'lucide-react';
 
 interface ConversationMessagesProps {
     messages: Message[];
@@ -33,8 +33,11 @@ export const ConversationMessages: React.FC<ConversationMessagesProps> = ({
         }
     };
 
+    const isLocalLink = (link: string) => {
+        return !link || link.startsWith('local://');
+    };
+
     if (isEmpty) {
-        // ... (Keep your existing isEmpty return block as is)
         return (
             <div className="h-full flex flex-col items-center justify-center px-6 py-12">
                 <div className="w-24 h-24 mx-auto mb-6 bg-blue-50 rounded-full flex items-center justify-center">
@@ -77,7 +80,7 @@ export const ConversationMessages: React.FC<ConversationMessagesProps> = ({
                             </div>
                         </div>
 
-                        {/* --- NEW: SOURCE SUMMARY & BADGES --- */}
+                        {/* SOURCE SUMMARY & BADGES */}
                         {message.role === 'assistant' && message.sources && message.sources.length > 0 && (
                             <div className="mt-3 flex flex-col gap-2 w-full animate-fadeInUp" style={{ animationDelay: '0.1s' }}>
                                 <div className="flex items-center gap-1.5 px-1">
@@ -91,19 +94,29 @@ export const ConversationMessages: React.FC<ConversationMessagesProps> = ({
                                     {message.sources.map((source: Source, sIdx: number) => (
                                         <a
                                             key={sIdx}
-                                            href={source.link}
-                                            target="_blank"
+                                            href={isLocalLink(source.link) ? undefined : source.link}
+                                            target={isLocalLink(source.link) ? undefined : "_blank"}
                                             rel="noopener noreferrer"
-                                            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 hover:bg-white border border-slate-200 hover:border-blue-300 rounded-lg transition-all group/badge"
+                                            onClick={isLocalLink(source.link) ? (e) => e.preventDefault() : undefined}
+                                            className={`flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg transition-all group/badge ${
+                                                isLocalLink(source.link)
+                                                    ? 'cursor-default'
+                                                    : 'hover:bg-white hover:border-blue-300 cursor-pointer'
+                                            }`}
                                         >
                                             <FileText className="w-3 h-3 text-slate-400 group-hover/badge:text-blue-500" />
                                             <span className="text-[11px] font-medium text-slate-600 group-hover/badge:text-blue-700 truncate max-w-[150px]">
                                                 {source.file}
                                             </span>
                                             <span className="text-[10px] bg-slate-200 group-hover/badge:bg-blue-100 text-slate-500 group-hover/badge:text-blue-600 px-1 rounded font-bold">
-                                                {source.page && source.page !== 'Not specified' ? `p.${source.page}` : source.data_type || source.file}
+                                                {source.page && source.page !== 'Not specified'
+                                                    ? `p.${source.page}`
+                                                    : source.data_type || source.file}
                                             </span>
-                                            <ExternalLink className="w-2.5 h-2.5 text-slate-300 group-hover/badge:text-blue-400" />
+                                            {/* Only show external link icon for non-local sources */}
+                                            {!isLocalLink(source.link) && (
+                                                <ExternalLink className="w-2.5 h-2.5 text-slate-300 group-hover/badge:text-blue-400" />
+                                            )}
                                         </a>
                                     ))}
                                 </div>
