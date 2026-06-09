@@ -28,7 +28,7 @@ app.add_middleware(
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 collection = chroma_client.get_or_create_collection(name="medical_research")
-rerank_model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+rerank_model = CrossEncoder('cross-encoder/ms-marco-TinyBERT-L-2-v2')
 
 # ============================================================================
 # PYDANTIC MODELS
@@ -913,4 +913,4 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))

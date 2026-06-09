@@ -101,7 +101,7 @@ export const ConversationMessages: React.FC<ConversationMessagesProps> = ({
                                                 {source.file}
                                             </span>
                                             <span className="text-[10px] bg-slate-200 group-hover/badge:bg-blue-100 text-slate-500 group-hover/badge:text-blue-600 px-1 rounded font-bold">
-                                                p.{source.page}
+                                                {source.page && source.page !== 'Not specified' ? `p.${source.page}` : source.data_type || source.file}
                                             </span>
                                             <ExternalLink className="w-2.5 h-2.5 text-slate-300 group-hover/badge:text-blue-400" />
                                         </a>
