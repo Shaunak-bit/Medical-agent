@@ -82,7 +82,7 @@ export default function Hero() {
                     <ArrowRight size={17} />
                 </Link>
                 <a
-                    href="#"
+                    href="/documentation"
                     className="inline-flex items-center gap-2.5 px-7 py-3.5 rounded-2xl border border-blue-200 bg-white text-blue-700 font-semibold text-base hover:border-blue-400 hover:bg-blue-50 transition-all duration-200 shadow-sm"
                 >
                     <BookOpen size={16} />

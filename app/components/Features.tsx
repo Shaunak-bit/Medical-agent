@@ -118,13 +118,7 @@ export default function Features() {
                                 ))}
                             </ul>
 
-                            {/* Learn More */}
-                            <a
-                                href="#"
-                                className={`inline-flex items-center gap-1.5 text-sm font-semibold ${color} mt-1 group-hover:gap-2.5 transition-all duration-200`}
-                            >
-                                Learn more <ChevronRight size={15} />
-                            </a>
+                            
                         </div>
                     ))}
                 </div>

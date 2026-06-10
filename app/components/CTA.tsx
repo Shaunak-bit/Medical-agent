@@ -86,12 +86,12 @@ export default function CTA() {
                                 Get Started Now
                                 <ArrowRight size={17} />
                             </Link>
-                            <a
-                                href="#"
+                            <Link
+                                href="/documentation"
                                 className="inline-flex items-center gap-2.5 px-8 py-4 rounded-2xl border border-white/30 text-white font-semibold text-base hover:bg-white/10 transition-colors duration-200"
                             >
                                 View Documentation
-                            </a>
+                            </Link>
                         </div>
                     </div>
                 </div>
